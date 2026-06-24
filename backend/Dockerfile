@@ -28,10 +28,13 @@ ENV PATH="${JAVA_HOME}/bin:${PATH}"
 # Audiveris self-hosted OMR engine
 # As of 5.10.x, releases ship OS-specific installers instead of a generic zip.
 # We install the Ubuntu .deb (jpackage bundle, self-contained runtime).
+# NB: the base image is Debian bookworm, so we use the ubuntu22.04 build whose
+# Depends are pre-"t64" (libasound2, not libasound2t64) and thus installable on
+# bookworm. The ubuntu24.04 build requires t64 packages absent from bookworm.
 # Override AUDIVERIS_VERSION or AUDIVERIS_URL at build time if needed.
 # ---------------------------------------------------------------------------
 ARG AUDIVERIS_VERSION=5.10.2
-ARG AUDIVERIS_DEB=Audiveris-${AUDIVERIS_VERSION}-ubuntu24.04-x86_64.deb
+ARG AUDIVERIS_DEB=Audiveris-${AUDIVERIS_VERSION}-ubuntu22.04-x86_64.deb
 ARG AUDIVERIS_URL=https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/${AUDIVERIS_DEB}
 
 RUN wget -q "${AUDIVERIS_URL}" -O /tmp/audiveris.deb \
