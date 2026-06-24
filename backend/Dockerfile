@@ -26,17 +26,22 @@ ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # ---------------------------------------------------------------------------
 # Audiveris self-hosted OMR engine
-# The GitHub release zip extracts to app-<VERSION>/ containing bin/ and lib/.
+# As of 5.10.x, releases ship OS-specific installers instead of a generic zip.
+# We install the Ubuntu .deb (jpackage bundle, self-contained runtime).
 # Override AUDIVERIS_VERSION or AUDIVERIS_URL at build time if needed.
 # ---------------------------------------------------------------------------
 ARG AUDIVERIS_VERSION=5.10.2
-ARG AUDIVERIS_URL=https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/app-${AUDIVERIS_VERSION}.zip
+ARG AUDIVERIS_DEB=Audiveris-${AUDIVERIS_VERSION}-ubuntu24.04-x86_64.deb
+ARG AUDIVERIS_URL=https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/${AUDIVERIS_DEB}
 
-RUN wget -q "${AUDIVERIS_URL}" -O /tmp/audiveris.zip \
-    && unzip -q /tmp/audiveris.zip -d /opt \
-    && mv /opt/app-${AUDIVERIS_VERSION} /opt/audiveris \
-    && chmod +x /opt/audiveris/bin/Audiveris \
-    && rm /tmp/audiveris.zip
+RUN wget -q "${AUDIVERIS_URL}" -O /tmp/audiveris.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/audiveris.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/audiveris.deb \
+    && BIN="$(find /opt -type f -path '*/bin/Audiveris' | head -n1)" \
+    && test -n "${BIN}" \
+    && mkdir -p /opt/audiveris/bin \
+    && { [ "${BIN}" = /opt/audiveris/bin/Audiveris ] || ln -sf "${BIN}" /opt/audiveris/bin/Audiveris; }
 
 # ---------------------------------------------------------------------------
 # Python application
