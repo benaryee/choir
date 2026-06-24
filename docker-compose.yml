@@ -1,0 +1,62 @@
+services:
+
+  # --------------------------------------------------------------------------
+  # Message broker for Celery
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  # --------------------------------------------------------------------------
+  # FastAPI backend  (OMR pipeline, file serving, job API)
+  # --------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env.docker
+    volumes:
+      - choir_data:/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Celery worker  (runs the heavy OMR + synthesis pipeline off-thread)
+  # --------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.celery_app.celery worker --loglevel=info --concurrency=2
+    env_file: .env.docker
+    volumes:
+      - choir_data:/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # React/Vite frontend served by nginx
+  # nginx also reverse-proxies /api/ and /files/ to the backend
+  # --------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  choir_data:
+  redis_data:
