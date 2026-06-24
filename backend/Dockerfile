@@ -37,12 +37,20 @@ ARG AUDIVERIS_VERSION=5.10.2
 ARG AUDIVERIS_DEB=Audiveris-${AUDIVERIS_VERSION}-ubuntu22.04-x86_64.deb
 ARG AUDIVERIS_URL=https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/${AUDIVERIS_DEB}
 
-RUN wget -q "${AUDIVERIS_URL}" -O /tmp/audiveris.deb \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends /tmp/audiveris.deb \
+# The package's postinst registers a desktop menu entry (xdg-desktop-menu),
+# which fails in a headless image. Since Audiveris is used purely via its CLI
+# here, we install the declared runtime libs explicitly and unpack the app
+# payload with `dpkg-deb -x` (no maintainer scripts) into /opt/audiveris.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libasound2 libbsd0 libmd0 libx11-6 libxau6 libxcb1 libxdmcp6 \
+        libxext6 libxi6 libxrender1 libxtst6 xdg-utils zlib1g \
+    && wget -q "${AUDIVERIS_URL}" -O /tmp/audiveris.deb \
+    && dpkg-deb -x /tmp/audiveris.deb / \
     && rm -rf /var/lib/apt/lists/* /tmp/audiveris.deb \
     && BIN="$(find /opt -type f -path '*/bin/Audiveris' | head -n1)" \
     && test -n "${BIN}" \
+    && chmod +x "${BIN}" \
     && mkdir -p /opt/audiveris/bin \
     && { [ "${BIN}" = /opt/audiveris/bin/Audiveris ] || ln -sf "${BIN}" /opt/audiveris/bin/Audiveris; }
 
