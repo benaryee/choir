@@ -44,6 +44,26 @@ class Settings(BaseSettings):
     soundfont_path: str = ""
     fluidsynth_cmd: str = "fluidsynth"
     ffmpeg_cmd: str = "ffmpeg"
+    # GM program used for choral parts when the score declares no instrument.
+    # 53 = "Voice Oohs": a sung timbre with clearer pitch definition than the
+    # more diffuse 52 ("Choir Aahs"), which matters when learning a line.
+    choir_midi_program: int = 53
+    # FluidSynth's default gain (0.2) renders very quietly; 0.6 gives headroom
+    # for the four-voice mix without driving the soundfont into clipping.
+    fluidsynth_gain: float = 0.6
+    # EBU R128 integrated loudness target. Every track is normalised to this so
+    # part and full-mix tracks sit at the same level in the player.
+    loudness_target_lufs: float = -16.0
+    normalize_audio: bool = True
+    # Voices render independently, so they are synthesised concurrently.
+    synth_workers: int = 4
+
+    # Pre-processing
+    preprocess_workers: int = 4
+    pdf_render_dpi: int = 300
+    # Pages quieter than this estimated noise level skip denoising entirely.
+    # Digital PDFs measure ~0; scans land well above it.
+    denoise_noise_threshold: float = 1.5
 
     @property
     def uploads_dir(self) -> Path:

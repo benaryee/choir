@@ -30,6 +30,29 @@ class ExtractedParts:
     detected: list[DetectedPart] = field(default_factory=list)
 
 
+def _apply_choral_timbre(part, program: int) -> None:
+    """Force a sung GM patch on ``part`` unless the score already chose one.
+
+    Audiveris exports carry no ``<midi-instrument>``, so music21 writes the
+    MIDI with no program change and every part plays back as GM program 0,
+    Acoustic Grand Piano. These are vocal practice tracks, so a part with no
+    declared instrument gets a choral patch instead. Scores that *do* name an
+    instrument (hand-authored MusicXML, sol-fa input) keep their own choice.
+    """
+    from music21 import instrument
+
+    existing = part.getElementsByClass(instrument.Instrument)
+    if any(getattr(i, "midiProgram", None) not in (None, 0) for i in existing):
+        return
+    for stale in existing:
+        part.remove(stale)
+
+    voice = instrument.Instrument()
+    voice.midiProgram = program
+    voice.instrumentName = "Voice"
+    part.insert(0, voice)
+
+
 def _classify_by_name(name: str) -> VoicePart | None:
     lowered = (name or "").lower()
     for voice, keywords in _VOICE_KEYWORDS.items():
@@ -75,7 +98,12 @@ def _expand_voices(parts: list) -> list:
     return expanded
 
 
-def extract_parts(musicxml: str, out_dir: Path, basename: str = "part") -> ExtractedParts:
+def extract_parts(
+    musicxml: str,
+    out_dir: Path,
+    basename: str = "part",
+    choir_midi_program: int = 53,
+) -> ExtractedParts:
     """Split ``musicxml`` into per-voice streams and render MIDI for each."""
     from music21 import converter, midi, stream
 
@@ -129,6 +157,10 @@ def extract_parts(musicxml: str, out_dir: Path, basename: str = "part") -> Extra
         xml_path = out_dir / f"{basename}_{voice.value}.musicxml"
         part.write("musicxml", fp=str(xml_path))
         result.musicxml_paths[voice] = xml_path
+
+        # Applied after the MusicXML write so the notated score keeps the
+        # engraver's own part naming; only the MIDI playback timbre changes.
+        _apply_choral_timbre(part, choir_midi_program)
 
         midi_path = out_dir / f"{basename}_{voice.value}.mid"
         mf = midi.translate.streamToMidiFile(part)

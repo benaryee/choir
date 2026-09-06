@@ -73,7 +73,14 @@ def run_pipeline(job_id: str) -> None:
         # --- Stage: pre-processing -------------------------------------------
         upload_path = settings.uploads_dir / job_id / job.filename
         work_dir = settings.pages_dir / job_id
-        pages = preprocess_upload(upload_path, job.filename, work_dir)
+        pages = preprocess_upload(
+            upload_path,
+            job.filename,
+            work_dir,
+            workers=settings.preprocess_workers,
+            dpi=settings.pdf_render_dpi,
+            noise_threshold=settings.denoise_noise_threshold,
+        )
 
         page_urls: list[str] = []
         for idx, page in enumerate(pages):
@@ -104,7 +111,11 @@ def run_pipeline(job_id: str) -> None:
             and omr_result.confidence < settings.omr_manual_threshold
         ):
             # Provide detected parts so the UI can show overlays for confirmation.
-            extracted = extract_parts(omr_result.musicxml, out_dir)
+            extracted = extract_parts(
+                omr_result.musicxml,
+                out_dir,
+                choir_midi_program=settings.choir_midi_program,
+            )
             _set(
                 job_id,
                 status=JobStatus.NEEDS_REVIEW,
@@ -188,11 +199,13 @@ def _finish_extraction_and_audio(
     musicxml = (out_dir / "score.musicxml").read_text(encoding="utf-8")
 
     # --- Stage: part extraction ---------------------------------------------
-    extracted = extract_parts(musicxml, out_dir)
-
     if voice_overrides:
         # Re-key MIDI/MusicXML maps according to user-confirmed labels.
-        extracted = _apply_overrides(musicxml, out_dir, voice_overrides)
+        extracted = _apply_overrides(musicxml, out_dir, voice_overrides, settings)
+    else:
+        extracted = extract_parts(
+            musicxml, out_dir, choir_midi_program=settings.choir_midi_program
+        )
 
     # Persist per-voice MusicXML.
     for voice, path in extracted.musicxml_paths.items():
@@ -200,7 +213,12 @@ def _finish_extraction_and_audio(
 
     # --- Stage: audio synthesis ---------------------------------------------
     _set(job_id, stage=Stage.GENERATING_AUDIO, progress=0.2)
-    mp3s = synthesize(extracted.midi_paths, out_dir / "audio", settings)
+    mp3s = synthesize(
+        extracted.midi_paths,
+        out_dir / "audio",
+        settings,
+        progress_cb=lambda pct: _set(job_id, progress=pct),
+    )
     audio_urls: dict[str, str] = {}
     for voice, mp3 in mp3s.items():
         audio_urls[voice.value] = storage.save_file(
@@ -255,12 +273,12 @@ def _generate_solfa(
 
 
 def _apply_overrides(
-    musicxml: str, out_dir: Path, overrides: dict[str, VoicePart]
+    musicxml: str, out_dir: Path, overrides: dict[str, VoicePart], settings
 ):
     """Re-extract parts honouring user-confirmed ``part_id -> voice`` mapping."""
     from music21 import converter, midi
 
-    from .parts import ExtractedParts
+    from .parts import ExtractedParts, _apply_choral_timbre
 
     score = converter.parseData(musicxml, format="musicxml")
     parts = list(score.parts) if hasattr(score, "parts") else []
@@ -278,6 +296,8 @@ def _apply_overrides(
         xml_path = out_dir / f"part_{voice.value}.musicxml"
         part.write("musicxml", fp=str(xml_path))
         result.musicxml_paths[voice] = xml_path
+
+        _apply_choral_timbre(part, settings.choir_midi_program)
 
         midi_path = out_dir / f"part_{voice.value}.mid"
         mf = midi.translate.streamToMidiFile(part)
