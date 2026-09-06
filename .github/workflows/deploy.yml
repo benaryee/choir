@@ -1,0 +1,121 @@
+name: Deploy to dev-proxy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".idea/**"
+  workflow_dispatch:
+
+# One deploy at a time. A newer push waits for the running deploy to finish
+# rather than racing it on the same docker compose project.
+concurrency:
+  group: deploy-dev-proxy
+  cancel-in-progress: false
+
+env:
+  DEPLOY_HOST: 45.79.22.192
+  DEPLOY_PORT: "3026"
+  DEPLOY_USER: bernard
+  DEPLOY_PATH: /home/bernard/apps/choir
+  # Host port the frontend container publishes on the dev-proxy box.
+  CHOIR_HTTP_PORT: "3040"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host dev-proxy
+            HostName $DEPLOY_HOST
+            Port $DEPLOY_PORT
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Sync source to server
+        run: |
+          ssh dev-proxy "mkdir -p '$DEPLOY_PATH'"
+          # --delete keeps the server tree identical to the repo, but the
+          # excludes below are server-owned state that must survive a deploy:
+          #   .env.docker  real secrets, never committed with values
+          #   backend/data local job/artifact scratch outside the volume
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude '.idea/' \
+            --exclude 'node_modules/' \
+            --exclude 'frontend/dist/' \
+            --exclude 'backend/.venv/' \
+            --exclude 'backend/data/' \
+            --exclude 'backend/.env' \
+            --exclude '.env.docker' \
+            ./ dev-proxy:"$DEPLOY_PATH/"
+
+      - name: Verify server environment file exists
+        run: |
+          ssh dev-proxy "test -f '$DEPLOY_PATH/.env.docker'" || {
+            echo "::error::$DEPLOY_PATH/.env.docker is missing on the server."
+            echo "It holds the deployment secrets and is intentionally not in git."
+            echo "Create it from .env.docker in the repo, then re-run this job."
+            exit 1
+          }
+
+      - name: Build and start containers
+        run: |
+          ssh dev-proxy bash -euo pipefail <<EOF
+            cd '$DEPLOY_PATH'
+            export CHOIR_HTTP_PORT='$CHOIR_HTTP_PORT'
+            docker compose up -d --build --remove-orphans
+            docker image prune -f --filter 'until=168h'
+          EOF
+
+      - name: Wait for health check
+        run: |
+          ssh dev-proxy bash -euo pipefail <<'EOF'
+            for i in $(seq 1 30); do
+              status=$(docker inspect --format '{{.State.Health.Status}}' choir-backend-1 2>/dev/null || echo starting)
+              if [ "$status" = healthy ]; then
+                echo "backend healthy after ${i} attempt(s)"
+                exit 0
+              fi
+              echo "attempt ${i}: backend is ${status}"
+              sleep 10
+            done
+            echo "backend did not become healthy in time"
+            docker compose logs --tail 100 backend
+            exit 1
+          EOF
+
+      - name: Smoke test public URL
+        run: |
+          url="http://$DEPLOY_HOST:$CHOIR_HTTP_PORT"
+          for i in $(seq 1 10); do
+            app=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/" || echo 000)
+            api=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/api/health" || echo 000)
+            if [ "$app" = 200 ] && [ "$api" = 200 ]; then
+              echo "Deployed: $url (app $app, api $api)"
+              exit 0
+            fi
+            echo "attempt ${i}: app=${app} api=${api}"
+            sleep 6
+          done
+          echo "::error::Smoke test failed for $url"
+          exit 1
+
+      - name: Report deployment
+        if: success()
+        run: echo "### Deployed to http://$DEPLOY_HOST:$CHOIR_HTTP_PORT" >> "$GITHUB_STEP_SUMMARY"

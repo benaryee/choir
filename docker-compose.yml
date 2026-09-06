@@ -51,8 +51,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    # Host port is overridable so the same compose file works locally (:80)
+    # and on the shared dev-proxy box, where :80/:443 belong to system nginx.
     ports:
-      - "80:80"
+      - "${CHOIR_HTTP_PORT:-80}:80"
     depends_on:
       - backend
     restart: unless-stopped
