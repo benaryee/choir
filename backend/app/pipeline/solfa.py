@@ -18,7 +18,8 @@ Notation conventions (Curwen movable-doh):
   relative to the reference doh placed in octave 4.
 * Rhythm grid: ``|`` bars a measure, ``:`` separates beats, ``.`` splits a beat
   into equal subdivisions, ``-`` holds the previous note, and an empty slot or
-  ``r`` is a rest.
+  ``R`` is a rest. (Lowercase ``r`` is the Ray/Re syllable, not a rest - see
+  the scale example below.)
 
 Example::
 
@@ -303,7 +304,9 @@ def _build_part(content: str, voice: str, parsed: _ParsedSolfa, ref_doh_midi: in
             slot_len = beat_len / max(1, len(subs))
             for sub in subs:
                 sub = sub.strip()
-                if sub in ("", "r", "R"):
+                # Lowercase "r" is the Ray/Re syllable (see _SOLFA_TO_DEGREE),
+                # not a rest - only an empty slot or capital "R" rests here.
+                if sub in ("", "R"):
                     part.append(note.Rest(quarterLength=slot_len))
                     last_note = None
                 elif sub == "-":

@@ -4,6 +4,8 @@ import { VOICE_COLORS } from "../types";
 import type { Voice } from "../types";
 
 const INACTIVE_COLOR = "#1e293b";
+// applyToStem/Beams/LedgerLines so a switch recolors a whole note, not just its head.
+const COLOR_OPTIONS = { applyToStem: true, applyToBeams: true, applyToLedgerLines: true };
 
 /**
  * Renders the extracted MusicXML with OpenSheetMusicDisplay and colours the
@@ -38,8 +40,8 @@ export function ScoreView({
       .load(musicXml)
       .then(() => {
         loadedRef.current = true;
-        colorActive(osmd, activeVoice, voicePartIndex);
         osmd.render();
+        colorActive(osmd, activeVoice, voicePartIndex);
       })
       .catch(() => {
         /* invalid MusicXML - leave container empty */
@@ -52,12 +54,15 @@ export function ScoreView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [musicXml]);
 
-  // Recolour when the selected voice changes.
+  // Recolour when the selected voice changes. This paints each note's
+  // already-rendered SVG directly via OSMD's setColor() instead of mutating
+  // the model and calling osmd.render() again - a full render re-lays out
+  // the whole score (800ms+ on a real multi-page anthem), which is what made
+  // switching parts feel sluggish.
   useEffect(() => {
     const osmd = osmdRef.current;
     if (!osmd || !loadedRef.current) return;
     colorActive(osmd, activeVoice, voicePartIndex);
-    osmd.render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeVoice]);
 
@@ -94,9 +99,11 @@ function colorActive(
       for (const entry of measure.staffEntries) {
         for (const gve of entry.graphicalVoiceEntries) {
           for (const note of gve.notes) {
-            if (note.sourceNote) {
-              note.sourceNote.NoteheadColor = color;
-            }
+            // Keep the model in sync too: setColor() only paints the already
+            // -rendered SVG, so OSMD's autoResize (or any other future full
+            // render) would otherwise repaint from the stale model colour.
+            if (note.sourceNote) note.sourceNote.NoteheadColor = color;
+            note.setColor(color, COLOR_OPTIONS);
           }
         }
       }

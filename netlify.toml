@@ -1,0 +1,8 @@
+# Netlify config for the ChoirParts frontend. The backend (FastAPI + OMR/audio
+# pipeline) can't run on Netlify - it's deployed separately (see render.yaml)
+# and the frontend talks to it via the VITE_API_BASE env var (set in the
+# Netlify site's dashboard once the backend URL is known; see api.ts).
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"

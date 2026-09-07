@@ -17,6 +17,7 @@ import logging
 import re
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,61 @@ def _parse_audiveris_confidence(log_text: str) -> float:
     return max(0.0, min(1.0, sum(vals) / len(vals)))
 
 
+def _expand_multi_measure_rests(musicxml: str) -> str:
+    """Expand compressed <measure-style><multiple-rest> spans into real measures.
+
+    Audiveris (and hand-engraved scores generally) encode a printed
+    multi-measure rest as a single <measure> carrying
+    <measure-style><multiple-rest count="N">, standing in for N measures.
+    music21's importer keeps only that one measure's duration and drops the
+    count, so any part with such a rest resumes N-1 measures too early -
+    it falls out of sync with every other voice for the rest of the piece.
+    Expanding it into N individual whole-rest measures before parsing keeps
+    every voice's timeline aligned.
+    """
+    try:
+        root = ET.fromstring(musicxml)
+    except ET.ParseError:
+        return musicxml
+
+    changed = False
+    for part in root.findall("part"):
+        for measure in list(part.findall("measure")):
+            attributes = measure.find("attributes")
+            style = attributes.find("measure-style") if attributes is not None else None
+            count_el = style.find("multiple-rest") if style is not None else None
+            if count_el is None or not (count_el.text or "").strip().isdigit():
+                continue
+            count = int(count_el.text.strip())
+            attributes.remove(style)
+            if len(attributes) == 0:
+                measure.remove(attributes)
+            if count <= 1:
+                continue
+
+            rest_note = measure.find("note")
+            duration_el = rest_note.find("duration") if rest_note is not None else None
+            if duration_el is None or not (duration_el.text or "").strip():
+                continue
+
+            idx = list(part).index(measure)
+            base_number = measure.get("number")
+            for i in range(1, count):
+                clone = ET.Element("measure")
+                if base_number and base_number.isdigit():
+                    clone.set("number", str(int(base_number) + i))
+                note_el = ET.SubElement(clone, "note")
+                ET.SubElement(note_el, "rest", {"measure": "yes"})
+                dur_el = ET.SubElement(note_el, "duration")
+                dur_el.text = duration_el.text
+                part.insert(idx + i, clone)
+            changed = True
+
+    if not changed:
+        return musicxml
+    return ET.tostring(root, encoding="unicode")
+
+
 def _strip_code_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -152,6 +208,7 @@ def run_omr(image_paths: list[Path], settings: Settings) -> OmrResult:
     """Execute the OMR cascade and return the best available result."""
     result = run_audiveris(image_paths, settings)
     if result and result.confidence >= settings.omr_confidence_threshold:
+        result.musicxml = _expand_multi_measure_rests(result.musicxml)
         return result
 
     fallback = run_gpt4o_vision(image_paths, settings)
@@ -161,6 +218,7 @@ def run_omr(image_paths: list[Path], settings: Settings) -> OmrResult:
             result = fallback
 
     if result is not None:
+        result.musicxml = _expand_multi_measure_rests(result.musicxml)
         return result
 
     # Nothing configured -> deterministic sample so the pipeline still completes.

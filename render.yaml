@@ -1,0 +1,55 @@
+# Render Blueprint for the ChoirParts backend.
+#
+# This runs everything as ONE web service (USE_CELERY=false, the in-process
+# thread pool jobs.py already supports for dev) instead of docker-compose's
+# separate backend/worker/redis trio. That's a deliberate simplification:
+# Render Disks can't be shared across services, so a separate worker would
+# need S3 storage (STORAGE_BACKEND=s3) to see the same files as the API. One
+# service with a disk is the simplest thing that works for a low-traffic
+# practice app; switch to the worker+Redis+S3 shape later if load needs it.
+#
+# Job state (InMemoryJobStore) lives in process memory and is lost on
+# restart/redeploy - acceptable here since jobs are short-lived and re-run
+# on re-upload.
+#
+# Disks require a paid instance type (not available on Render's free tier).
+# To deploy: Render dashboard -> New -> Blueprint -> select this repo.
+services:
+  - type: web
+    name: choir-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /api/health
+    disk:
+      name: choir-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      # Render assigns https://<service-name>.onrender.com; update this if
+      # the name above changes or Render suffixes it to avoid a collision.
+      - key: PUBLIC_BASE_URL
+        value: https://choir-backend.onrender.com
+      - key: USE_CELERY
+        value: "false"
+      - key: STORAGE_BACKEND
+        value: local
+      - key: AUDIVERIS_CMD
+        value: /opt/audiveris/bin/Audiveris
+      - key: OMR_CONFIDENCE_THRESHOLD
+        value: "0.5"
+      - key: OMR_MANUAL_THRESHOLD
+        value: "0.4"
+      - key: SOUNDFONT_PATH
+        value: /usr/share/sounds/sf2/FluidR3_GM.sf2
+      - key: FLUIDSYNTH_CMD
+        value: fluidsynth
+      - key: FFMPEG_CMD
+        value: ffmpeg
+      # Optional GPT-4o Vision fallback for low-confidence Audiveris reads -
+      # set in the Render dashboard (Environment tab) rather than here.
+      - key: OPENAI_API_KEY
+        sync: false
