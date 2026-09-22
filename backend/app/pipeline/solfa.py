@@ -63,10 +63,29 @@ _SOLFA_TO_DEGREE = {
     "l": 9, "lah": 9, "la": 9,
     "le": 10, "li": 10,
     "t": 11, "te": 11, "ti": 11,
+    # Flattened degrees (Curwen "-a" series), common in Ghanaian and other
+    # hymnal scores, e.g. ``ta`` for the flat seventh.
+    "ma": 3, "ta": 10,
 }
 
 _REF_OCTAVE = 4  # reference doh sits here; commas/apostrophes shift from it.
+# Men's parts are written in the same octave as the women's but sung an octave
+# lower (the standard sol-fa convention), so shift them when converting.
+_VOICE_OCTAVE_SHIFT = {"tenor": -1, "bass": -1}
 _TOKEN_RE = re.compile(r"^([A-Za-z]+)([',]*)$")
+# Printed scores mark octaves with sub/superscript digits (s₁ = s, and d¹ = d');
+# normalise those to the comma/apostrophe marks the parser understands.
+_SUBSCRIPT_OCTAVE_RE = re.compile(r"([A-Za-z])([₁₂])")
+_SUPERSCRIPT_OCTAVE_RE = re.compile(r"([A-Za-z])([¹²])")
+
+
+def _normalise_octave_marks(token: str) -> str:
+    token = _SUBSCRIPT_OCTAVE_RE.sub(
+        lambda m: m.group(1) + "," * (2 if m.group(2) == "₂" else 1), token
+    )
+    return _SUPERSCRIPT_OCTAVE_RE.sub(
+        lambda m: m.group(1) + "'" * (2 if m.group(2) == "²" else 1), token
+    )
 
 
 def is_solfa_filename(filename: str) -> bool:
@@ -113,7 +132,7 @@ def part_to_solfa(part, tonic_pc: int, ref_doh_midi: int) -> str:
             if idx < 0 or idx >= beats:
                 continue
             if el.isRest:
-                token = "r"
+                token = "R"  # capital: lowercase "r" is Ray
             else:
                 pitch = el.pitches[-1] if el.isChord else el.pitch
                 token = _solfa_for_pitch(pitch.midi, tonic_pc, ref_doh_midi)
@@ -181,7 +200,9 @@ def score_to_solfa(musicxml: str) -> tuple[dict[VoicePart, str], str]:
         voice = assignments.get(idx)
         if voice is None:
             continue
-        out[voice] = part_to_solfa(part, tonic_pc, ref_doh_midi)
+        # Write men's parts an octave up, as sol-fa convention prints them.
+        shift = _VOICE_OCTAVE_SHIFT.get(voice.value, 0)
+        out[voice] = part_to_solfa(part, tonic_pc, ref_doh_midi + 12 * shift)
     return out, key_name
 
 
@@ -236,6 +257,9 @@ def _parse_header_and_voices(text: str) -> _ParsedSolfa:
             elif field_name == "time":
                 if re.match(r"^\d+\s*/\s*\d+$", value):
                     parsed.time_sig = value.replace(" ", "")
+                elif re.match(r"^\d+$", value):
+                    # Sol-fa scores often print just the beat count ("Time: 2").
+                    parsed.time_sig = f"{value}/4"
             elif field_name == "tempo":
                 try:
                     parsed.tempo = int(re.findall(r"\d+", value)[0])
@@ -261,7 +285,7 @@ def _parse_header_and_voices(text: str) -> _ParsedSolfa:
 
 
 def _syllable_to_midi(token: str, tonic_pc: int, ref_doh_midi: int) -> int | None:
-    match = _TOKEN_RE.match(token)
+    match = _TOKEN_RE.match(_normalise_octave_marks(token))
     if not match:
         return None
     name, marks = match.group(1).lower(), match.group(2)
@@ -278,6 +302,7 @@ def _build_part(content: str, voice: str, parsed: _ParsedSolfa, ref_doh_midi: in
     den = int(parsed.time_sig.split("/")[1])
     beat_len = 4.0 / den
     tonic_pc = m21key.Key(parsed.key_name).tonic.pitchClass
+    ref_doh_midi += 12 * _VOICE_OCTAVE_SHIFT.get(voice, 0)
 
     part = stream.Part()
     part.id = voice.capitalize()

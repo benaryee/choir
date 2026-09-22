@@ -49,6 +49,7 @@ class OmrMethod(str, Enum):
     GPT4O_VISION = "gpt4o_vision"
     SAMPLE = "sample"
     SOLFA = "solfa"  # input was a tonic sol-fa file; no OMR needed
+    CLAUDE_SOLFA = "claude_solfa"  # sol-fa page images transcribed by Claude
 
 
 class DetectedPart(BaseModel):

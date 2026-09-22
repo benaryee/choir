@@ -2,10 +2,13 @@
 
 Strategy:
     1. Primary: self-hosted Audiveris (Java) -> MusicXML + a confidence score.
-    2. Fallback: if confidence < ``OMR_CONFIDENCE_THRESHOLD``, call GPT-4o Vision.
-    3. If confidence is still below ``OMR_MANUAL_THRESHOLD``, the runner surfaces
+       A result with almost no notes (e.g. no staves found) counts as a failure.
+    2. Tonic sol-fa: if Audiveris fails or is unsure, Claude checks whether the
+       pages are sol-fa and, if so, transcribes them (see ``solfa_vision``).
+    3. Fallback: if confidence < ``OMR_CONFIDENCE_THRESHOLD``, call GPT-4o Vision.
+    4. If confidence is still below ``OMR_MANUAL_THRESHOLD``, the runner surfaces
        the manual-correction UI.
-    4. Local-dev safety net: if neither engine is configured, emit a sample SATB
+    5. Local-dev safety net: if no engine is configured, emit a sample SATB
        score so the rest of the pipeline can be exercised end to end.
 
 Each engine returns an :class:`OmrResult` (MusicXML text + confidence + method).
@@ -24,7 +27,9 @@ from pathlib import Path
 
 from ..config import Settings
 from ..models import OmrMethod
+from . import solfa as solfa_mod
 from .sample import sample_satb_musicxml
+from .solfa_vision import transcribe_solfa_pages
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +157,42 @@ def _expand_multi_measure_rests(musicxml: str) -> str:
     return ET.tostring(root, encoding="unicode")
 
 
+def _note_count(musicxml: str) -> int:
+    """Number of pitched notes (not rests) in a MusicXML document."""
+    try:
+        root = ET.fromstring(musicxml)
+    except ET.ParseError:
+        return 0
+    return sum(1 for note in root.iter("note") if note.find("pitch") is not None)
+
+
+def _has_enough_notes(result: OmrResult, page_count: int, settings: Settings) -> bool:
+    """False when OMR "succeeded" but found next to nothing on the pages."""
+    notes = _note_count(result.musicxml)
+    if notes >= settings.omr_min_notes_per_page * max(1, page_count):
+        return True
+    logger.warning(
+        "%s found only %d notes on %d page(s); treating as a failed read",
+        result.method.value, notes, page_count,
+    )
+    return False
+
+
+def run_claude_solfa(image_paths: list[Path], settings: Settings) -> OmrResult | None:
+    """Transcribe tonic sol-fa pages with Claude and render them to MusicXML."""
+    text = transcribe_solfa_pages(image_paths, settings)
+    if text is None:
+        return None
+    try:
+        musicxml = solfa_mod.solfa_to_musicxml(text)
+    except ValueError as exc:
+        logger.warning("Claude sol-fa transcription didn't parse: %s", exc)
+        return None
+    # The sol-fa parser validates syllables but not rhythm alignment, so this
+    # sits just below Audiveris-trusted territory rather than at 1.0.
+    return OmrResult(musicxml=musicxml, confidence=0.8, method=OmrMethod.CLAUDE_SOLFA)
+
+
 def _strip_code_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -206,12 +247,23 @@ def run_gpt4o_vision(image_paths: list[Path], settings: Settings) -> OmrResult |
 
 def run_omr(image_paths: list[Path], settings: Settings) -> OmrResult:
     """Execute the OMR cascade and return the best available result."""
+    pages = len(image_paths)
     result = run_audiveris(image_paths, settings)
+    if result and not _has_enough_notes(result, pages, settings):
+        result = None
     if result and result.confidence >= settings.omr_confidence_threshold:
         result.musicxml = _expand_multi_measure_rests(result.musicxml)
         return result
 
+    # Audiveris can't read sol-fa at all, so an empty or unsure read may mean
+    # the score isn't staff notation. Claude returns None for staff scores.
+    solfa = run_claude_solfa(image_paths, settings)
+    if solfa is not None:
+        return solfa
+
     fallback = run_gpt4o_vision(image_paths, settings)
+    if fallback is not None and not _has_enough_notes(fallback, pages, settings):
+        fallback = None
     if fallback is not None:
         # Prefer whichever engine reported higher confidence.
         if result is None or fallback.confidence >= result.confidence:

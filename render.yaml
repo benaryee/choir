@@ -53,3 +53,7 @@ services:
       # set in the Render dashboard (Environment tab) rather than here.
       - key: OPENAI_API_KEY
         sync: false
+      # Claude transcription for tonic sol-fa scores (no staves) - set in the
+      # Render dashboard (Environment tab) rather than here.
+      - key: ANTHROPIC_API_KEY
+        sync: false

@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_vision_model: str = "gpt-4o"
 
+    # OMR: Claude tonic sol-fa transcription (for scores with no staff notation)
+    anthropic_api_key: str = ""
+    anthropic_vision_model: str = "claude-opus-5"
+    # An OMR result with fewer notes than this per page is treated as a failed
+    # read (e.g. Audiveris finding no staves on a sol-fa page) rather than
+    # trusted, so the cascade moves on instead of emitting a near-empty score.
+    omr_min_notes_per_page: int = 8
+
     # Audio synthesis
     soundfont_path: str = ""
     fluidsynth_cmd: str = "fluidsynth"
